@@ -2,22 +2,21 @@ import tkinter as tk
 from tkinter import messagebox
 import socket
 import threading
-import queue
+from datetime import datetime
 import mysql.connector
-
-# server_address = ('192.168.20.146', 666)
-# server_address2 = ('192.168.0.1', 2000)
+import os
 
 class TCPClientGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("TCP Client")
 
+
         self.mydb = mysql.connector.connect(
-            host='localhost',
-            user="root",
-            password="root",
-            database="plc_data"
+            host=os.getenv('MY_SQL_HOST'),
+            user=os.getenv('MY_SQL_USER'),
+            password=os.getenv('MY_SQL_PASS'),
+            database=os.getenv('MY_SQL_DB')
         )
 
         self.client_socket = None
@@ -37,7 +36,7 @@ class TCPClientGUI:
 
         try:
             port = int(port)
-            if (port <= 0):
+            if port <= 0:
                 raise ValueError("Input Error")
         except ValueError:
             messagebox.showerror("Input Error", "Port musi być liczbą całkowitą oraz być większy od zera.")
@@ -100,17 +99,99 @@ class TCPClientGUI:
         self.data_output = tk.Label(self.data_frame, text="Dane: -", fg="black")
         self.data_output.grid(row=0, column=2, padx=5, pady=5)
 
-
     def receive_data(self):
         while self.connected and not self.stop_event.is_set():
             try:
-                data = self.client_socket.recv(1024)
-                if data:
-                    self.data_output.config(text=f"Dane: {data}", fg="green")
-                else:
-                    self.data_output.config(text=f"Dane: brak", fg="red")
+                data = self.client_socket.recv(74)
+                parsed_data = self.parse_data(data)
+
+                self.insert_row_into_db(parsed_data)
+
+                # if data:
+                #     self.data_output.config(text=f"Dane: {data}", fg="green")
+                # else:
+                #     self.data_output.config(text=f"Dane: brak", fg="red")
             except socket.error:
                 self.disconnect_from_server()
+
+    def parse_data(self, data):
+        def parse_timestamp(received_ts):
+            year = int.from_bytes(received_ts[:2], byteorder='big')
+            month = received_ts[2]
+            day = received_ts[3]
+
+            hours = received_ts[5]
+            minutes = received_ts[6]
+            seconds = received_ts[7]
+            millis = int.from_bytes(received_ts[8:], byteorder="big") // 1_000_000
+
+            dt = datetime(year, month, day, hours, minutes, seconds, millis * 1000)
+
+            timestamp = dt.strftime(f'%Y-%m-%d %H:%M:%S.{millis:03d}')
+
+            return timestamp
+
+        tcp_frame = []
+        tcp_frame.append(data[:2].decode('utf-8'))                      # BEGINNING
+        tcp_frame.append(int.from_bytes(data[2:4], byteorder='big'))    # FUNCTION
+        tcp_frame.append(int.from_bytes(data[4:6], byteorder='big'))    # STATUS
+        tcp_frame.append(parse_timestamp(data[6:18]))                   # TIMESTAMP OF SENDING DATA
+        tcp_frame.append(int.from_bytes(data[18:22], byteorder='big'))  # SEQUENCE NUMBER
+        tcp_frame.append(int.from_bytes(data[22:24], byteorder='big'))  # VERSION
+        tcp_frame.append(int.from_bytes(data[24:26], byteorder='big'))  # LENGTH
+
+        # DATA PART
+        tcp_frame.append(parse_timestamp(data[26:38]))                  # TIMESTAMP OF GENERATING DATA
+        # BUTTONS, ACTUATORS, BALLS, LAMPS
+        for i in range(4):
+            tcp_frame.append(int.from_bytes(data[38 + i * 2:40 + i * 2], byteorder='big'))
+
+        tcp_frame.append(int.from_bytes(data[46:50], byteorder='big'))  # PNEUMATIC
+
+        # REST, HMI, ACTIVATORS, STATES, DEAD MEMORY, MOMENTARY POWER, CUMULATIVE ENERGY
+        # MOMENTARY AIR CONSUMPTION, CUMULATIVE AIR CONSUMPTION
+        for i in range(9):
+            tcp_frame.append(int.from_bytes(data[50 + i * 2:52 + i * 2], byteorder='big'))
+
+        tcp_frame.append(int.from_bytes(data[68:72], byteorder='big'))  # ALARMS
+
+        tcp_frame.append(data[:2].decode('utf-8'))                      # END
+
+        return tcp_frame
+
+    def insert_row_into_db(self, data):
+        cursor = self.mydb.cursor()
+
+        first_part = data[:7]
+        first_part.append(data[-1])
+
+        frame_sql = 'INSERT INTO tcp_frame (`beginning`, `function`, `status`, `timestamp`, `number`, `version`, `length`, `ending`) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)'
+
+        cursor.execute(frame_sql, first_part)
+        self.mydb.commit()
+
+        query = 'SELECT id FROM tcp_frame ORDER BY id DESC LIMIT 1'
+        cursor.execute(query)
+        foreign_key_tuple = cursor.fetchone()
+        foreign_key = foreign_key_tuple[0]
+
+        second_part = data[7:-1]
+        data_sql = f"""
+        INSERT INTO tcp_data (
+            `data_id`, `gen_ts`, `buttons`, `actuators_sensors`, `balls_sensors`, `lamps`, `pneumatic_receivers`,
+            `rest_receivers`, `HMI_buttons`, `activators`, `states`, `dead_memory`, `momentary_power`,
+            `cumulative_energy`, `momentary_air`, `cumulative_air`, `alarms`
+        ) VALUES (
+            {foreign_key}, %s, %s, %s, %s, %s, %s,
+            %s, %s, %s, %s, %s, %s,
+            %s, %s, %s, %s
+        )
+        """
+
+        cursor.execute(data_sql, second_part)
+        self.mydb.commit()
+
+        cursor.close()
 
     def open_login_panel(self):
         # Clear existing widgets
