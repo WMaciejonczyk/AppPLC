@@ -155,7 +155,7 @@ class TCPClientGUI:
 
         tcp_frame.append(int.from_bytes(data[68:72], byteorder='big'))  # ALARMS
 
-        tcp_frame.append(data[:2].decode('utf-8'))                      # END
+        tcp_frame.append(data[-2:].decode('utf-8'))                      # END
 
         return tcp_frame
 
