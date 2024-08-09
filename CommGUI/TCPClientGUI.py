@@ -5,12 +5,14 @@ import threading
 from datetime import datetime
 import mysql.connector
 import os
+from matplotlib.figure import Figure
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+
 
 class TCPClientGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("TCP Client")
-
 
         self.mydb = mysql.connector.connect(
             host=os.getenv('MY_SQL_HOST'),
@@ -56,7 +58,7 @@ class TCPClientGUI:
             messagebox.showerror("Connection Error", f"Nie udało się połączyć z serwerem: {e}")
             self.client_socket = None
             self.connected = False
-           # self.update_all_diodes("red")
+            # self.update_all_diodes("red")
 
     def connect_to_server_start(self):
         try:
@@ -90,7 +92,6 @@ class TCPClientGUI:
         self.thread.start()
         self.data_start_label.config(text="STOP", command=self.stop_receiving)
 
-
     def stop_receiving(self):
         self.disconnect_from_server_stop()
         self.data_output.config(text="Zatrzymano odbieranie danych", fg="red")
@@ -104,7 +105,6 @@ class TCPClientGUI:
             except AttributeError:
                 self.disconnect_from_server_stop()
                 break
-
 
     # def update_all_diodes(self, color):
     #     # Update all diode colors based on the provided color
@@ -306,9 +306,41 @@ class TCPClientGUI:
 
         self.measurements()
 
+        self.create_graph()
+
         # Disconnect Button
         self.disconnect_button = tk.Button(root, text="Disconnect", command=self.disconnect_from_server)
         self.disconnect_button.grid(row=6, column=6, columnspan=2, padx=5, pady=5)
+
+    def create_graph(self):
+        # Create a matplotlib figure
+        self.figure = Figure(figsize=(5, 2), dpi=100)
+        self.ax = self.figure.add_subplot(111)
+
+        # Sample data for the graph
+        cursor = self.mydb.cursor()
+
+        query = 'SELECT * FROM tcp_frame LIMIT 100'
+        cursor.execute(query)
+        data = cursor.fetchall()
+        ids = [row[0] for row in data]
+        timestamps = [row[4].timestamp() for row in data]
+
+        print(ids)
+        print(timestamps)
+
+        # Plot the data
+        self.ax.plot(timestamps, ids, marker='o')
+
+        # Configure the graph appearance
+        self.ax.set_title("Sample Graph")
+        self.ax.set_xlabel("X Axis")
+        self.ax.set_ylabel("Y Axis")
+
+        # Embed the graph into the Tkinter window
+        self.canvas = FigureCanvasTkAgg(self.figure, master=self.root)
+        self.canvas.get_tk_widget().grid(row=7, column=0, columnspan=12, padx=5, pady=5)
+        self.canvas.draw()
 
     def front_buttons(self):
         # Frame for diode indicators
@@ -331,7 +363,7 @@ class TCPClientGUI:
 
         # Texts and initial states
         actuators_texts = ["Podnośnik w górze", "Podnośnik w dole", "Slajd w przodzie",
-                      "Slajd w tyle", "Blokada w pozycji 1", "Blokada w pozycji 2"]
+                           "Slajd w tyle", "Blokada w pozycji 1", "Blokada w pozycji 2"]
 
         # Create text-label and diode pairs
         actuators_diodes = []
@@ -364,7 +396,6 @@ class TCPClientGUI:
 
         # Texts and initial states
         balls_texts = ["Nieobecność detalu (pre-stop)", "Nieobecność detalu (stop)", "Nieobecność detalu (podnośnik)"]
-        balls_states = [0] * len(balls_texts)  # All start with state 0
 
         # Create text-label and diode pairs
         balls_diodes = []
@@ -397,11 +428,10 @@ class TCPClientGUI:
 
         # Texts and initial states
         receivers_texts = ["POLECENIE - podnośnik w górze", "POLECENIE - podnośnik w dole",
-                                "POLECENIE - slajd w przód", "POLECENIE - slajd w tył",
-                                "POLECENIE - blokada w pozycję pre-stop w dole", "POLECENIE - blokada w pozycję stop w dole",
-                                "POLECENIE - ssawka - zassanie", "POLECENIE - ssawka - wydmuch",
-                                "Zawór dodatkowy 1", "Zawór dodatkowy 2", "Zawór dodatkowy 3", "Zawór dodatkowy 4"]
-        receivers_states = [0] * len(receivers_texts)  # All start with state 0
+                           "POLECENIE - slajd w przód", "POLECENIE - slajd w tył",
+                           "POLECENIE - blokada w pozycję pre-stop w dole", "POLECENIE - blokada w pozycję stop w dole",
+                           "POLECENIE - ssawka - zassanie", "POLECENIE - ssawka - wydmuch",
+                           "Zawór dodatkowy 1", "Zawór dodatkowy 2", "Zawór dodatkowy 3", "Zawór dodatkowy 4"]
 
         # Create text-label and diode pairs
         receivers_diodes = []
@@ -470,8 +500,8 @@ class TCPClientGUI:
         # Draw the circle
         return canvas.create_oval(x1, y1, x2, y2, fill=color, outline="black")
 
+
 if __name__ == "__main__":
     root = tk.Tk()
     gui = TCPClientGUI(root)
     root.mainloop()
-
