@@ -23,6 +23,8 @@ class TCPClientGUI:
         self.connected = False
         self.ip = ""
         self.port = 0
+        self.all_canvas = []
+        self.all_diodes = []
 
         self.open_login_panel()
 
@@ -137,7 +139,9 @@ class TCPClientGUI:
                 data = self.client_socket.recv(74)
                 parsed_data = self.parse_data(data)
 
-                self.insert_row_into_db(parsed_data)
+                self.convert_to_binary(parsed_data)
+
+                # self.insert_row_into_db(parsed_data)
 
                 # if data:
                 #     self.data_output.config(text=f"Dane: {data}", fg="green")
@@ -145,6 +149,41 @@ class TCPClientGUI:
                 #     self.data_output.config(text=f"Dane: brak", fg="red")
             except socket.error:
                 self.disconnect_from_server_stop()
+
+    def convert_to_binary(self, data):
+        try:
+            # SELECTED MODE
+            mode = format(data[8], '04b')
+            if mode.count('1') != 1:
+                raise ValueError()
+            found_mode = mode.find('1')
+            match found_mode:
+                case 0:
+                    self.front_button_label.config(text=self.front_buttons_texts[3])
+                case 1:
+                    self.front_button_label.config(text=self.front_buttons_texts[2])
+                case 2:
+                    self.front_button_label.config(text=self.front_buttons_texts[1])
+                case 3:
+                    self.front_button_label.config(text=self.front_buttons_texts[0])
+
+            counter = -1
+            list_of_wanted_indices = [0, 1, 3]
+            # TODO: Count in power and energy consumptions later
+            for i in list_of_wanted_indices:
+                binary_form = format(data[i + 9], '016b')[::-1]
+                counter += 1
+                list_of_canvas = self.all_canvas[counter]
+                list_of_diodes = self.all_diodes[counter]
+                for j in range(len(list_of_canvas)):
+                    # index = len(list_of_canvas) - j - 1
+                    if int(binary_form[j]) == 1:
+                        list_of_canvas[j].itemconfig(list_of_diodes[j], fill="green")
+                    else:
+                        list_of_canvas[j].itemconfig(list_of_diodes[j], fill="white")
+
+        except ValueError:
+            self.stop_receiving()
 
     def parse_data(self, data):
         def parse_timestamp(received_ts):
@@ -277,112 +316,126 @@ class TCPClientGUI:
         self.front_buttons_frame.grid(row=0, column=0, columnspan=2, padx=5, pady=5)
 
         # Texts and initial states
-        self.front_buttons_texts = ["Automatyczny", "Manualny", "Wyłączony"]
+        self.front_buttons_texts = ["Automatyczny", "Ręczny", "Wyłączony", "Wyłączenie awaryjne"]
 
         # Create text-label
         title_label = tk.Label(self.front_buttons_frame, text="TRYB:")
         title_label.grid(row=0, column=0, padx=5, pady=5)
-        label = tk.Label(self.front_buttons_frame, text=self.front_buttons_texts[2])
-        label.grid(row=1, column=0, padx=5, pady=5)
+        self.front_button_label = tk.Label(self.front_buttons_frame, text=self.front_buttons_texts[2])
+        self.front_button_label.grid(row=1, column=0, padx=5, pady=5)
 
     def actuators_sensors(self):
         # Frame for diode indicators
-        self.actuators_frame = tk.Frame(root)
-        self.actuators_frame.grid(row=0, column=2, columnspan=2, padx=5, pady=5)
+        actuators_frame = tk.Frame(root)
+        actuators_frame.grid(row=0, column=2, columnspan=2, padx=5, pady=5)
 
         # Texts and initial states
-        self.actuators_texts = ["Podnośnik w górze", "Podnośnik w dole", "Slajd w przodzie",
-                      "Blokada w pozycji 1", "Blokada w pozycji 2"]
-        self.actuators_states = [0] * len(self.actuators_texts)  # All start with state 0
+        actuators_texts = ["Podnośnik w górze", "Podnośnik w dole", "Slajd w przodzie",
+                      "Slajd w tyle", "Blokada w pozycji 1", "Blokada w pozycji 2"]
 
         # Create text-label and diode pairs
-        self.actuators_diodes = []
-        self.actuators_labels = []
-        for i, text in enumerate(self.actuators_texts):
+        actuators_diodes = []
+        actuators_labels = []
+        actuators_canvas = []
+        for i, text in enumerate(actuators_texts):
             # Label with text
-            label = tk.Label(self.actuators_frame, text=text)
+            label = tk.Label(actuators_frame, text=text)
             label.grid(row=i, column=0, padx=5, pady=5)
 
             # Canvas to draw the diode
-            canvas = tk.Canvas(self.actuators_frame, width=30, height=30)
+            canvas = tk.Canvas(actuators_frame, width=30, height=30)
             canvas.grid(row=i, column=1, padx=5, pady=5)
 
             # Draw the initial diode (small circle)
-            diode = self.draw_circle(canvas, 10, 15, 5, color="red")
+            diode = self.draw_circle(canvas, 12, 15, 10, color="white")
 
             # Store references
-            self.actuators_diodes.append(diode)
-            self.actuators_labels.append(label)
+            actuators_canvas.append(canvas)
+            actuators_diodes.append(diode)
+            actuators_labels.append(label)
+
+        self.all_canvas.append(actuators_canvas)
+        self.all_diodes.append(actuators_diodes)
 
     def balls_sensors(self):
         # Frame for diode indicators
-        self.balls_frame = tk.Frame(root)
-        self.balls_frame.grid(row=0, column=4, columnspan=2, padx=5, pady=5)
+        balls_frame = tk.Frame(root)
+        balls_frame.grid(row=0, column=4, columnspan=2, padx=5, pady=5)
 
         # Texts and initial states
-        self.balls_texts = ["Nieobecność detalu (pre-stop)", "Nieobecność detalu (stop)", "Nieobecność detalu (podnośnik)"]
-        self.balls_states = [0] * len(self.balls_texts)  # All start with state 0
+        balls_texts = ["Nieobecność detalu (pre-stop)", "Nieobecność detalu (stop)", "Nieobecność detalu (podnośnik)"]
+        balls_states = [0] * len(balls_texts)  # All start with state 0
 
         # Create text-label and diode pairs
-        self.balls_diodes = []
-        self.balls_labels = []
-        for i, text in enumerate(self.balls_texts):
+        balls_diodes = []
+        balls_labels = []
+        balls_canvas = []
+        for i, text in enumerate(balls_texts):
             # Label with text
-            label = tk.Label(self.balls_frame, text=text)
+            label = tk.Label(balls_frame, text=text)
             label.grid(row=i, column=0, padx=5, pady=5)
 
             # Canvas to draw the diode
-            canvas = tk.Canvas(self.balls_frame, width=30, height=30)
+            canvas = tk.Canvas(balls_frame, width=30, height=30)
             canvas.grid(row=i, column=1, padx=5, pady=5)
 
             # Draw the initial diode (small circle)
-            diode = self.draw_circle(canvas, 10, 15, 5, color="red")
+            diode = self.draw_circle(canvas, 12, 15, 10, color="white")
 
             # Store references
-            self.balls_diodes.append(diode)
-            self.balls_labels.append(label)
+            balls_canvas.append(canvas)
+            balls_diodes.append(diode)
+            balls_labels.append(label)
+
+        self.all_canvas.append(balls_canvas)
+        self.all_diodes.append(balls_diodes)
 
     def pneumatic_receivers(self):
         # Frame for diode indicators
-        self.receivers_frame = tk.Frame(root)
-        self.receivers_frame.grid(row=0, column=6, columnspan=4, padx=5, pady=5)
+        receivers_frame = tk.Frame(root)
+        receivers_frame.grid(row=0, column=6, columnspan=4, padx=5, pady=5)
 
         # Texts and initial states
-        self.receivers_texts = ["POLECENIE - podnośnik w górze", "POLECENIE - podnośnik w dole",
+        receivers_texts = ["POLECENIE - podnośnik w górze", "POLECENIE - podnośnik w dole",
                                 "POLECENIE - slajd w przód", "POLECENIE - slajd w tył",
                                 "POLECENIE - blokada w pozycję pre-stop w dole", "POLECENIE - blokada w pozycję stop w dole",
                                 "POLECENIE - ssawka - zassanie", "POLECENIE - ssawka - wydmuch",
                                 "Zawór dodatkowy 1", "Zawór dodatkowy 2", "Zawór dodatkowy 3", "Zawór dodatkowy 4"]
-        self.receivers_states = [0] * len(self.receivers_texts)  # All start with state 0
+        receivers_states = [0] * len(receivers_texts)  # All start with state 0
 
         # Create text-label and diode pairs
-        self.receivers_diodes = []
-        self.receivers_labels = []
+        receivers_diodes = []
+        receivers_labels = []
+        receivers_canvas = []
 
         j = 0
-        for i, text in enumerate(self.receivers_texts):
+        for i, text in enumerate(receivers_texts):
             # Label with text
-            if (i < 6):
-                label = tk.Label(self.receivers_frame, text=text)
+            if i < 6:
+                label = tk.Label(receivers_frame, text=text)
                 label.grid(row=i, column=0, padx=5, pady=5)
 
                 # Canvas to draw the diode
-                canvas = tk.Canvas(self.receivers_frame, width=30, height=30)
+                canvas = tk.Canvas(receivers_frame, width=30, height=30)
                 canvas.grid(row=i, column=1, padx=5, pady=5)
             else:
-                label = tk.Label(self.receivers_frame, text=text)
+                label = tk.Label(receivers_frame, text=text)
                 label.grid(row=j, column=2, padx=5, pady=5)
 
                 # Canvas to draw the diode
-                canvas = tk.Canvas(self.receivers_frame, width=30, height=30)
+                canvas = tk.Canvas(receivers_frame, width=30, height=30)
                 canvas.grid(row=j, column=3, padx=5, pady=5)
                 j += 1
             # Draw the initial diode (small circle)
-            diode = self.draw_circle(canvas, 10, 15, 5, color="red")
+            diode = self.draw_circle(canvas, 12, 15, 10, color="white")
 
             # Store references
-            self.receivers_diodes.append(diode)
-            self.receivers_labels.append(label)
+            receivers_canvas.append(canvas)
+            receivers_diodes.append(diode)
+            receivers_labels.append(label)
+
+        self.all_canvas.append(receivers_canvas)
+        self.all_diodes.append(receivers_diodes)
 
     def measurements(self):
         self.measurements_frame = tk.Frame(root)
