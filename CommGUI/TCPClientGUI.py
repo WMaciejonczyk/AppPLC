@@ -5,6 +5,7 @@ import threading
 from datetime import datetime
 import mysql.connector
 import os
+from tkinter import ttk
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
@@ -97,6 +98,13 @@ class TCPClientGUI:
         self.data_output.config(text="Zatrzymano odbieranie danych", fg="red")
         self.data_start_label.config(text="START", command=self.start_receiving)
 
+        for i in range(len(self.all_canvas)):
+            for j in range(len(self.all_canvas[i])):
+                self.all_canvas[i][j].itemconfig(self.all_diodes[i][j], fill="white")
+
+        self.cycle_progress_label.config(text="---")
+        self.progress.config(value=0)
+
         while True:
             try:
                 data = self.client_socket.recv(1024)
@@ -166,6 +174,22 @@ class TCPClientGUI:
                     self.front_button_label.config(text=self.front_buttons_texts[1])
                 case 3:
                     self.front_button_label.config(text=self.front_buttons_texts[0])
+
+            # STATE
+            state = format(data[16], '010b')[::-1]
+            if state.count('1') != 1:
+                raise ValueError()
+
+            one_found = False
+            index_found = 0
+            while not one_found:
+                if state[index_found] == '1':
+                    break
+                else:
+                    index_found += 1
+
+            self.cycle_progress_label.config(text=self.cycle_progress_texts[index_found])
+            self.progress.config(value=(index_found+1)*10)
 
             counter = -1
             list_of_wanted_indices = [0, 1, 3]
@@ -306,6 +330,8 @@ class TCPClientGUI:
 
         self.measurements()
 
+        self.cycle_progress()
+
         self.create_graph()
 
         # Disconnect Button
@@ -339,7 +365,7 @@ class TCPClientGUI:
 
         # Embed the graph into the Tkinter window
         self.canvas = FigureCanvasTkAgg(self.figure, master=self.root)
-        self.canvas.get_tk_widget().grid(row=7, column=0, columnspan=12, padx=5, pady=5)
+        self.canvas.get_tk_widget().grid(row=8, column=0, columnspan=12, padx=5, pady=5)
         self.canvas.draw()
 
     def front_buttons(self):
@@ -489,6 +515,27 @@ class TCPClientGUI:
             # Store references
             self.measurements_labels.append(label)
             self.measurements_results.append(result_label)
+
+    def cycle_progress(self):
+        cycle_progress_frame = tk.Frame(root)
+        cycle_progress_frame.grid(row=1, column=1, rowspan=2, padx=5, pady=5)
+
+        # Texts and initial states
+        initial_text = "---"
+
+        self.cycle_progress_texts = ["Pozycja bazowa", "Piłka na prestop", "Piłka na stop", "Piłka na podnośniku",
+                                     "Piłka na podnośniku - ssawka wysunięta", "Piłka na podnośniku - podniesiona",
+                                     "Piłka przyssana", "Piłka przyssana - podnośnik w dole",
+                                     "Piłka przyssana - ssawka wsunięta", "Wydmuch wykonany"]
+
+        # Create text-label
+        self.cycle_progress_label = tk.Label(cycle_progress_frame, text=initial_text)
+        self.cycle_progress_label.grid(row=0, column=0, padx=5, pady=5)
+
+        # Create progress bar
+        self.progress = ttk.Progressbar(cycle_progress_frame, orient="horizontal", length=300, mode="determinate")
+        self.progress['value'] = 0
+        self.progress.grid(row=1, column=0, padx=5, pady=5)
 
     def draw_circle(self, canvas, x, y, radius, color="black"):
         # Calculate the bounding box coordinates
