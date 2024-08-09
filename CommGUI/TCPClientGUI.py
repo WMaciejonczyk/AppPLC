@@ -2,7 +2,6 @@ import tkinter as tk
 from tkinter import messagebox
 import socket
 import threading
-import queue
 import mysql.connector
 
 # server_address = ('192.168.20.146', 666)
@@ -22,22 +21,22 @@ class TCPClientGUI:
 
         self.client_socket = None
         self.connected = False
-
-        self.stop_event = threading.Event()
+        self.ip = ""
+        self.port = 0
 
         self.open_login_panel()
 
     def connect_to_server(self):
-        ip = self.ip_entry.get()
-        port = self.port_entry.get()
+        self.ip = self.ip_entry.get()
+        self.port = int(self.port_entry.get())
 
-        if not ip or not port:
+        if not self.ip or not self.port:
             messagebox.showerror("Input Error", "Proszę podaj adres IP oraz port.")
             return
 
         try:
-            port = int(port)
-            if (port <= 0):
+            port = int(self.port)
+            if port <= 0:
                 raise ValueError("Input Error")
         except ValueError:
             messagebox.showerror("Input Error", "Port musi być liczbą całkowitą oraz być większy od zera.")
@@ -45,7 +44,7 @@ class TCPClientGUI:
 
         try:
             self.client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.client_socket.connect((ip, port))
+            self.client_socket.connect((self.ip, self.port))
             self.connected = True
 
             # Overwrite the main window content
@@ -55,11 +54,21 @@ class TCPClientGUI:
             messagebox.showerror("Connection Error", f"Nie udało się połączyć z serwerem: {e}")
             self.client_socket = None
             self.connected = False
-            self.update_all_diodes("red")
+           # self.update_all_diodes("red")
+
+    def connect_to_server_start(self):
+        try:
+            self.client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.client_socket.connect((self.ip, self.port))
+            self.connected = True
+
+        except socket.error as e:
+            messagebox.showerror("Connection Error", f"Nie udało się połączyć z serwerem: {e}")
+            self.client_socket = None
+            self.connected = False
 
     def disconnect_from_server(self):
         if self.client_socket:
-            self.stop_event.set()
             self.client_socket.close()
         self.client_socket = None
         self.connected = False
@@ -67,11 +76,33 @@ class TCPClientGUI:
         # Overwrite the main window content
         self.open_login_panel()
 
+    def disconnect_from_server_stop(self):
+        if self.client_socket:
+            self.client_socket.close()
+        self.client_socket = None
+        self.connected = False
+
     def start_receiving(self):
-        self.stop_event.clear()
-        self.receive_thread = threading.Thread(target=self.receive_data)
-        self.receive_thread.daemon = True  # This ensures the thread exits when the main program exits
-        self.receive_thread.start()
+        self.connect_to_server_start()
+        self.thread = threading.Thread(target=self.receive_data, daemon=True)
+        self.thread.start()
+        self.data_start_label.config(text="STOP", command=self.stop_receiving)
+
+
+    def stop_receiving(self):
+        self.disconnect_from_server_stop()
+        self.data_output.config(text="Zatrzymano odbieranie danych", fg="red")
+        self.data_start_label.config(text="START", command=self.start_receiving)
+
+        while True:
+            try:
+                data = self.client_socket.recv(1024)
+                if not data:
+                    break
+            except AttributeError:
+                self.disconnect_from_server_stop()
+                break
+
 
     # def update_all_diodes(self, color):
     #     # Update all diode colors based on the provided color
@@ -102,15 +133,13 @@ class TCPClientGUI:
 
 
     def receive_data(self):
-        while self.connected and not self.stop_event.is_set():
+        while self.connected:
             try:
                 data = self.client_socket.recv(1024)
                 if data:
                     self.data_output.config(text=f"Dane: {data}", fg="green")
-                else:
-                    self.data_output.config(text=f"Dane: brak", fg="red")
             except socket.error:
-                self.disconnect_from_server()
+                self.disconnect_from_server_stop()
 
     def open_login_panel(self):
         # Clear existing widgets
@@ -133,7 +162,7 @@ class TCPClientGUI:
         self.port_entry = tk.Entry(self.entry_frame)
         self.port_entry.grid(row=1, column=1, padx=5, pady=5)
 
-        # Connect and Disconnect Buttons
+        # Connect Button
         self.connect_button = tk.Button(self.entry_frame, text="Connect", command=self.connect_to_server)
         self.connect_button.grid(row=2, column=0, padx=5, pady=5)
 

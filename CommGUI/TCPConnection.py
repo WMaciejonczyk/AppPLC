@@ -1,7 +1,7 @@
 import socket
 import mysql.connector
 
-server_address = ('192.168.20.146', 666)
+server_address = ('192.168.20.160', 666)
 mydb = mysql.connector.connect(
   host='localhost',
   user="root",
