@@ -10,6 +10,49 @@ from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
 
+class TCPFrame:
+    def __init__(self, data):
+        self.beginning = data[0]
+        self.function = data[1]
+        self.status = data[2]
+        self.ts_send = data[3]
+        self.number = data[4]
+        self.version = data[5]
+        self.length = data[6]
+        self.ts_gen = data[7]
+        self.buttons = data[8]
+        self.actuators = data[9]
+        self.balls = data[10]
+        self.lamps = data[11]
+        self.pneumatic = data[12]
+        self.rest = data[13]
+        self.hmi = data[14]
+        self.activators = data[15]
+        self.states = data[16]
+        self.dead_mem = data[17]
+        self.mom_pow = data[18]
+        self.cum_en = data[19]
+        self.mom_air = data[20]
+        self.cum_air = data[21]
+        self.alarms = data[22]
+        self.end = data[23]
+
+    def get_attributes_without_data(self):
+        result = [self.beginning, self.function, self.status,
+                  self.ts_send, self. number, self.version,
+                  self.length, self.end]
+
+        return result
+
+    def get_data_attributes(self):
+        result = [self.ts_gen, self.buttons, self.actuators, self.balls,
+                  self.lamps, self.pneumatic, self.rest, self.hmi, self.activators,
+                  self.states, self.dead_mem, self.mom_pow, self.cum_en, self.mom_air,
+                  self.cum_air, self.alarms]
+
+        return result
+
+
 class TCPClientGUI:
     def __init__(self, root):
         self.root = root
@@ -28,6 +71,8 @@ class TCPClientGUI:
         self.port = 0
         self.all_canvas = []
         self.all_diodes = []
+        self.received_tcp_frame = None
+        self.received_first_frame = True
 
         self.open_login_panel()
 
@@ -114,22 +159,6 @@ class TCPClientGUI:
                 self.disconnect_from_server_stop()
                 break
 
-    # def update_all_diodes(self, color):
-    #     # Update all diode colors based on the provided color
-    #     for diode in self.diodes:
-    #         self.diode_frame.canvas.itemconfig(diode, fill=color)
-    #
-    # def toggle_all_states(self):
-    #     # Toggle all states between 0 and 1
-    #     self.states = [1 - state for state in self.states]
-    #     # self.update_all_diodes()
-
-    # def update_all_diodes(self):
-    #     Update diode colors based on the current states
-    #     for diode, state in zip(self.diodes, self.states):
-    #         color = "green" if state == 1 else "red"
-    #         self.diode_frame.canvas.itemconfig(diode, fill=color)
-
     def data_widget(self):
         # Create text-label
         self.data_frame = tk.Frame(root)
@@ -144,64 +173,46 @@ class TCPClientGUI:
     def receive_data(self):
         while self.connected:
             try:
+                # Receiving bytes from PLC
                 data = self.client_socket.recv(74)
-                parsed_data = self.parse_data(data)
-
-                self.convert_to_binary(parsed_data)
-
-                # self.insert_row_into_db(parsed_data)
-
-                # if data:
-                #     self.data_output.config(text=f"Dane: {data}", fg="green")
-                # else:
-                #     self.data_output.config(text=f"Dane: brak", fg="red")
+                # Parsing received bytes
+                self.parse_data(data)
+                # Modifying interface accordingly
+                self.modify_GUI()
+                # Updating database
+                self.insert_row_into_db()
             except socket.error:
                 self.disconnect_from_server_stop()
 
-    def convert_to_binary(self, data):
+    def modify_GUI(self):
         try:
+            if not self.received_tcp_frame:
+                raise ValueError("No TCP frame data available!")
+
             # SELECTED MODE
-            mode = format(data[8], '04b')
-            if mode.count('1') != 1:
-                raise ValueError()
+            mode = format(self.received_tcp_frame.buttons, '04b')[::-1]
             found_mode = mode.find('1')
-            match found_mode:
-                case 0:
-                    self.front_button_label.config(text=self.front_buttons_texts[3])
-                case 1:
-                    self.front_button_label.config(text=self.front_buttons_texts[2])
-                case 2:
-                    self.front_button_label.config(text=self.front_buttons_texts[1])
-                case 3:
-                    self.front_button_label.config(text=self.front_buttons_texts[0])
+            self.front_button_label.config(text=self.front_buttons_texts[found_mode])
 
-            # STATE
-            state = format(data[16], '010b')[::-1]
-            if state.count('1') != 1:
-                raise ValueError()
+            # SELECTED STATE
+            state = format(self.received_tcp_frame.states, '010b')[::-1]
+            found_state = state.find('1')
+            self.cycle_progress_label.config(text=self.cycle_progress_texts[found_state])
+            self.progress.config(value=(found_state+1)*10)
 
-            one_found = False
-            index_found = 0
-            while not one_found:
-                if state[index_found] == '1':
-                    break
-                else:
-                    index_found += 1
-
-            self.cycle_progress_label.config(text=self.cycle_progress_texts[index_found])
-            self.progress.config(value=(index_found+1)*10)
-
-            counter = -1
-            list_of_wanted_indices = [0, 1, 3]
+            # UPDATING DIODES
             # TODO: Count in power and energy consumptions later
-            for i in list_of_wanted_indices:
-                binary_form = format(data[i + 9], '016b')[::-1]
-                counter += 1
-                list_of_canvas = self.all_canvas[counter]
-                list_of_diodes = self.all_diodes[counter]
+            binary_form_actuators = format(self.received_tcp_frame.actuators, '016b')[::-1]
+            binary_form_balls = format(self.received_tcp_frame.balls, '016b')[::-1]
+            binary_form_pneumatic = format(self.received_tcp_frame.pneumatic, '016b')[::-1]
+
+            binary_forms = [binary_form_actuators, binary_form_balls, binary_form_pneumatic]
+
+            for i in range(3):
+                list_of_canvas = self.all_canvas[i]
+                list_of_diodes = self.all_diodes[i]
                 for j in range(len(list_of_canvas)):
-                    # index = len(list_of_canvas) - j - 1
-                    if int(binary_form[j]) == 1:
+                    if int(binary_forms[i][j]) == 1:
                         list_of_canvas[j].itemconfig(list_of_diodes[j], fill="green")
                     else:
                         list_of_canvas[j].itemconfig(list_of_diodes[j], fill="white")
@@ -227,38 +238,82 @@ class TCPClientGUI:
             return timestamp
 
         tcp_frame = []
-        tcp_frame.append(data[:2].decode('utf-8'))                      # BEGINNING
-        tcp_frame.append(int.from_bytes(data[2:4], byteorder='big'))    # FUNCTION
-        tcp_frame.append(int.from_bytes(data[4:6], byteorder='big'))    # STATUS
-        tcp_frame.append(parse_timestamp(data[6:18]))                   # TIMESTAMP OF SENDING DATA
-        tcp_frame.append(int.from_bytes(data[18:22], byteorder='big'))  # SEQUENCE NUMBER
-        tcp_frame.append(int.from_bytes(data[22:24], byteorder='big'))  # VERSION
-        tcp_frame.append(int.from_bytes(data[24:26], byteorder='big'))  # LENGTH
 
-        # DATA PART
-        tcp_frame.append(parse_timestamp(data[26:38]))                  # TIMESTAMP OF GENERATING DATA
-        # BUTTONS, ACTUATORS, BALLS, LAMPS
-        for i in range(4):
-            tcp_frame.append(int.from_bytes(data[38 + i * 2:40 + i * 2], byteorder='big'))
+        try:
+            # Checking if beginning and ending are correct
+            first_char_beg = chr(data[0])
+            second_char_beg = chr(data[1])
+            first_char_end = chr(data[-2])
+            second_char_end = chr(data[-1])
+            if first_char_beg != second_char_end or second_char_beg != first_char_end:
+                raise ValueError()
 
-        tcp_frame.append(int.from_bytes(data[46:50], byteorder='big'))  # PNEUMATIC
+            tcp_frame.append(data[:2].decode('utf-8'))                      # BEGINNING
+            tcp_frame.append(int.from_bytes(data[2:4], byteorder='big'))    # FUNCTION
+            tcp_frame.append(int.from_bytes(data[4:6], byteorder='big'))    # STATUS
+            tcp_frame.append(parse_timestamp(data[6:18]))                   # TIMESTAMP OF SENDING DATA
 
-        # REST, HMI, ACTIVATORS, STATES, DEAD MEMORY, MOMENTARY POWER, CUMULATIVE ENERGY
-        # MOMENTARY AIR CONSUMPTION, CUMULATIVE AIR CONSUMPTION
-        for i in range(9):
-            tcp_frame.append(int.from_bytes(data[50 + i * 2:52 + i * 2], byteorder='big'))
+            seq_number = int.from_bytes(data[18:22], byteorder='big')
+            if not self.received_first_frame:
+                cursor = self.mydb.cursor()
+                query = 'SELECT number FROM tcp_frame ORDER BY id DESC LIMIT 1'
+                cursor.execute(query)
+                previous_seq_number_tuple = cursor.fetchone()
+                previous_seq_number = previous_seq_number_tuple[0]
+                if seq_number != previous_seq_number + 1:
+                    raise ValueError("Wrong sequence number!")
 
-        tcp_frame.append(int.from_bytes(data[68:72], byteorder='big'))  # ALARMS
+            tcp_frame.append(seq_number)                                    # SEQUENCE NUMBER
+            tcp_frame.append(int.from_bytes(data[22:24], byteorder='big'))  # VERSION
 
-        tcp_frame.append(data[-2:].decode('utf-8'))                      # END
+            # Checking if the attribute 'length' is correctly set
+            length = int.from_bytes(data[24:26], byteorder='big')
+            if length != len(data):
+                raise ValueError()
 
-        return tcp_frame
+            tcp_frame.append(length)
 
-    def insert_row_into_db(self, data):
+            # DATA PART
+            tcp_frame.append(parse_timestamp(data[26:38]))                  # TIMESTAMP OF GENERATING DATA
+
+            # BUTTONS, ACTUATORS, BALLS, LAMPS
+            # Checking if mode (buttons) is correctly set
+            mode = format(int.from_bytes(data[38:40]), '04b')
+            if mode.count('1') != 1:
+                raise ValueError()
+
+            for i in range(4):
+                tcp_frame.append(int.from_bytes(data[38 + i * 2:40 + i * 2], byteorder='big'))
+
+            tcp_frame.append(int.from_bytes(data[46:50], byteorder='big'))  # PNEUMATIC
+
+            # REST, HMI, ACTIVATORS, STATES, DEAD MEMORY, MOMENTARY POWER, CUMULATIVE ENERGY
+            # MOMENTARY AIR CONSUMPTION, CUMULATIVE AIR CONSUMPTION
+
+            # Checking if state is correctly set
+            state = format(int.from_bytes(data[56:58]), '010b')[::-1]
+            mode_int = int.from_bytes(data[38:40])
+            if state.count('1') == 0 and mode_int != 2:  # or state.count('1') > 1:
+                raise ValueError()
+
+            for i in range(9):
+                tcp_frame.append(int.from_bytes(data[50 + i * 2:52 + i * 2], byteorder='big'))
+
+            tcp_frame.append(int.from_bytes(data[68:72], byteorder='big'))  # ALARMS
+
+            tcp_frame.append(data[-2:].decode('utf-8'))                      # END
+
+        except ValueError:
+            self.stop_receiving()
+
+        frame = TCPFrame(tcp_frame)
+        self.received_tcp_frame = frame
+        self.received_first_frame = False
+
+    def insert_row_into_db(self):
         cursor = self.mydb.cursor()
 
-        first_part = data[:7]
-        first_part.append(data[-1])
+        first_part = self.received_tcp_frame.get_attributes_without_data()
 
         frame_sql = 'INSERT INTO tcp_frame (`beginning`, `function`, `status`, `timestamp`, `number`, `version`, `length`, `ending`) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)'
 
@@ -270,7 +325,7 @@ class TCPClientGUI:
         foreign_key_tuple = cursor.fetchone()
         foreign_key = foreign_key_tuple[0]
 
-        second_part = data[7:-1]
+        second_part = self.received_tcp_frame.get_data_attributes()
         data_sql = f"""
         INSERT INTO tcp_data (
             `data_id`, `gen_ts`, `buttons`, `actuators_sensors`, `balls_sensors`, `lamps`, `pneumatic_receivers`,
@@ -351,9 +406,6 @@ class TCPClientGUI:
         data = cursor.fetchall()
         ids = [row[0] for row in data]
         timestamps = [row[4].timestamp() for row in data]
-
-        print(ids)
-        print(timestamps)
 
         # Plot the data
         self.ax.plot(timestamps, ids, marker='o')
