@@ -37,6 +37,7 @@ class TCPFrame:
         self.cum_air = data[21]
         self.alarms = data[22]
         self.end = data[23]
+        self.datetime = data[24]
 
     def get_attributes_without_data(self):
         result = [self.beginning, self.function, self.status,
@@ -80,8 +81,11 @@ class TCPClientGUI:
         self.all_measurement_labels = []
         self.all_measurement_results = []
         self.received_tcp_frame = None
+        self.first_frame = None
+        self.temp_state = None
 
         self.global_session_counter = 0
+        self.state_change = False
 
         self.open_login_panel()
 
@@ -101,21 +105,12 @@ class TCPClientGUI:
             messagebox.showerror("Input Error", "Port musi być liczbą całkowitą oraz być większy od zera.")
             return
 
-        try:
-            self.client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.client_socket.connect((self.ip, self.port))
-            self.connected = True
+        self.start()
 
-            # Overwrite the main window content
-            self.open_main_panel()
+        # Overwrite the main window content
+        self.open_main_panel()
 
-        except socket.error as e:
-            messagebox.showerror("Connection Error", f"Nie udało się połączyć z serwerem: {e}")
-            self.client_socket = None
-            self.connected = False
-            # self.update_all_diodes("red")
-
-    def connect_to_server_start(self):
+    def start(self):
         try:
             self.client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.client_socket.connect((self.ip, self.port))
@@ -135,7 +130,7 @@ class TCPClientGUI:
         # Overwrite the main window content
         self.open_login_panel()
 
-    def disconnect_from_server_stop(self):
+    def stop(self):
         if self.client_socket:
             self.client_socket.close()
         self.client_socket = None
@@ -143,13 +138,14 @@ class TCPClientGUI:
 
     def start_receiving(self):
         self.global_session_counter = 0
-        self.connect_to_server_start()
+        self.start()
         self.thread = threading.Thread(target=self.receive_data, daemon=True)
         self.thread.start()
+        self.data_output.config(text="Odbiór danych...", fg="green")
         self.data_start_label.config(text="STOP", command=self.stop_receiving)
 
     def stop_receiving(self):
-        self.disconnect_from_server_stop()
+        self.stop()
         self.data_output.config(text="Zatrzymano odbieranie danych", fg="red")
         self.data_start_label.config(text="START", command=self.start_receiving)
 
@@ -157,7 +153,8 @@ class TCPClientGUI:
             for j in range(len(self.all_canvas[i])):
                 self.all_canvas[i][j].itemconfig(self.all_diodes[i][j], fill="white")
 
-        self.cycle_progress_label.config(text="---")
+        self.front_button_label.config(text="TRYB: ---")
+        self.cycle_progress_label.config(text="STATUS: ---")
         self.progress.config(value=0)
         self.global_session_counter = 0
 
@@ -167,19 +164,8 @@ class TCPClientGUI:
                 if not data:
                     break
             except AttributeError:
-                self.disconnect_from_server_stop()
+                self.stop()
                 break
-
-    def data_widget(self):
-        # Create text-label
-        self.data_frame = tk.Frame(root)
-        self.data_frame.grid(row=7, column=6, columnspan=4, padx=5, pady=5)
-
-        self.data_start_label = tk.Button(self.data_frame, text="START", command=self.start_receiving)
-        self.data_start_label.grid(row=0, column=0, columnspan=2, padx=5, pady=5)
-
-        self.data_output = tk.Label(self.data_frame, text="Dane: -", fg="black")
-        self.data_output.grid(row=0, column=2, padx=5, pady=5)
 
     def receive_data(self):
         while self.connected:
@@ -193,7 +179,7 @@ class TCPClientGUI:
                 # Updating database
                 self.insert_row_into_db()
             except socket.error:
-                self.disconnect_from_server_stop()
+                self.stop()
 
     def modify_GUI(self):
         try:
@@ -203,12 +189,12 @@ class TCPClientGUI:
             # SELECTED MODE
             mode = format(self.received_tcp_frame.buttons, '04b')[::-1]
             found_mode = mode.find('1')
-            self.front_button_label.config(text=self.front_buttons_texts[found_mode])
+            self.front_button_label.config(text=f'TRYB: {self.front_buttons_texts[found_mode]}')
 
             # SELECTED STATE
             state = format(self.received_tcp_frame.states, '010b')[::-1]
             found_state = state.find('1')
-            self.cycle_progress_label.config(text=self.cycle_progress_texts[found_state])
+            self.cycle_progress_label.config(text=f'STATUS: {self.cycle_progress_texts[found_state]}')
             self.progress.config(value=(found_state+1)*10)
 
             # UPDATING DIODES
@@ -253,7 +239,7 @@ class TCPClientGUI:
 
             timestamp = dt.strftime(f'%Y-%m-%d %H:%M:%S.{millis:03d}')
 
-            return timestamp
+            return timestamp, dt
 
         tcp_frame = []
 
@@ -269,7 +255,7 @@ class TCPClientGUI:
             tcp_frame.append(data[:2].decode('utf-8'))                      # BEGINNING
             tcp_frame.append(int.from_bytes(data[2:4], byteorder='big'))    # FUNCTION
             tcp_frame.append(int.from_bytes(data[4:6], byteorder='big'))    # STATUS
-            tcp_frame.append(parse_timestamp(data[6:18]))                   # TIMESTAMP OF SENDING DATA
+            tcp_frame.append(parse_timestamp(data[6:18])[0])                   # TIMESTAMP OF SENDING DATA
 
             seq_number = int.from_bytes(data[18:22], byteorder='big')
             if self.received_tcp_frame and (seq_number != self.received_tcp_frame.number + 1):
@@ -286,7 +272,7 @@ class TCPClientGUI:
             tcp_frame.append(length)
 
             # DATA PART
-            tcp_frame.append(parse_timestamp(data[26:38]))                  # TIMESTAMP OF GENERATING DATA
+            tcp_frame.append(parse_timestamp(data[26:38])[0])                  # TIMESTAMP OF GENERATING DATA
 
             # BUTTONS, ACTUATORS, BALLS, LAMPS
             # Checking if mode (buttons) is correctly set
@@ -304,25 +290,43 @@ class TCPClientGUI:
 
             # Checking if state is correctly set
             state = format(int.from_bytes(data[56:58]), '010b')[::-1]
+
             mode_int = int.from_bytes(data[38:40])
+
+            # If mode is set to manual then state's ones' count can be equal 0
             if (state.count('1') == 0 and mode_int != 2) or state.count('1') > 1:
                 raise ValueError()
+
+            state_int = int.from_bytes(data[56:58], byteorder='big')
+            if not self.temp_state:
+                self.temp_state = state_int
+            elif self.temp_state != state_int:
+                self.state_change = True
+                self.insert_row_into_measurements_table()
+                self.temp_state = state_int
 
             for i in range(8):
                 tcp_frame.append(int.from_bytes(data[50 + i * 2:52 + i * 2], byteorder='big'))
 
-            test = struct.unpack('f', data[66:70])[0]
-            tcp_frame.append(struct.unpack('f', data[66:70])[0])     # CUMULATIVE AIR CONSUMPTION
+            tcp_frame.append(struct.unpack('f', data[66:70][::-1])[0])     # CUMULATIVE AIR CONSUMPTION
 
             tcp_frame.append(int.from_bytes(data[70:74], byteorder='big'))   # ALARMS
 
             tcp_frame.append(data[-2:].decode('utf-8'))                      # END
 
+            tcp_frame.append(parse_timestamp(data[26:38])[1])                # DATETIME
+
         except ValueError:
             self.stop_receiving()
 
         frame = TCPFrame(tcp_frame)
+
+        if (not self.first_frame) or self.state_change:
+            self.first_frame = frame
+            self.state_change = False
+
         self.received_tcp_frame = frame
+
         if self.global_session_counter < 25:
             self.global_session_counter += 1
         if self.global_session_counter == 1:
@@ -359,6 +363,21 @@ class TCPClientGUI:
         """
 
         cursor.execute(data_sql, second_part)
+        self.mydb.commit()
+
+        cursor.close()
+
+    def insert_row_into_measurements_table(self):
+        cumulative_air_subtraction = self.received_tcp_frame.cum_air - self.first_frame.cum_air
+        datetime_diff = self.received_tcp_frame.datetime - self.first_frame.datetime
+        time = datetime_diff.total_seconds()
+        cursor = self.mydb.cursor()
+        # TODO: cumulative energy
+        data = [self.first_frame.states, cumulative_air_subtraction, time]
+
+        frame_sql = 'INSERT INTO states_measurements (`state`, `cumulative_energy`, `cumulative_air`, `time`) VALUES (%s, 1000, %s, %s)'
+
+        cursor.execute(frame_sql, data)
         self.mydb.commit()
 
         cursor.close()
@@ -407,55 +426,32 @@ class TCPClientGUI:
 
         self.cycle_progress()
 
+    def data_widget(self):
+        # Create text-label
+        self.data_frame = tk.Frame(root)
+        self.data_frame.grid(row=8, column=0, columnspan=2, rowspan=3, padx=5, pady=5)
+
+        self.data_start_label = tk.Button(self.data_frame, text="START", command=self.start_receiving)
+        self.data_start_label.grid(row=0, column=0, columnspan=2, padx=5, pady=5)
+
+        self.data_output = tk.Label(self.data_frame, text="", fg="black")
+        self.data_output.grid(row=1, column=0, columnspan=2, padx=5, pady=5)
+
         # Disconnect Button
-        self.disconnect_button = tk.Button(root, text="Disconnect", command=self.disconnect_from_server)
-        self.disconnect_button.grid(row=6, column=6, columnspan=2, padx=5, pady=5)
-
-    def create_graph(self):
-        # Create a matplotlib figure
-        self.figure = Figure(figsize=(5, 2), dpi=100)
-        self.ax = self.figure.add_subplot(111)
-
-        # Configure the graph appearance
-        self.ax.set_title("Sample Graph")
-        self.ax.set_xlabel("X Axis")
-        self.ax.set_ylabel("Y Axis")
-
-        # Embed the graph into the Tkinter window
-        self.canvas = FigureCanvasTkAgg(self.figure, master=self.root)
-        self.canvas.get_tk_widget().grid(row=8, column=0, columnspan=12, padx=5, pady=5)
-
-        self.update_graph()
-
-    def update_graph(self):
-        self.ax.clear()
-        # Sample data for the graph
-        cursor = self.mydb.cursor()
-
-        query = f'SELECT * FROM (SELECT * FROM tcp_frame ORDER BY id DESC LIMIT {self.global_session_counter}) AS subquery ORDER BY id'
-        cursor.execute(query)
-        data = cursor.fetchall()
-        ids = [row[0] for row in data]
-        timestamps = [row[4].timestamp() for row in data]
-
-        # Plot the data
-        self.ax.plot(timestamps, ids, marker='o')
-
-        self.canvas.draw()
+        self.disconnect_button = tk.Button(self.data_frame, text="Disconnect", command=self.disconnect_from_server)
+        self.disconnect_button.grid(row=2, column=0, columnspan=2, padx=5, pady=5)
 
     def front_buttons(self):
         # Frame for diode indicators
         self.front_buttons_frame = tk.Frame(root)
-        self.front_buttons_frame.grid(row=0, column=0, columnspan=2, padx=5, pady=5)
+        self.front_buttons_frame.grid(row=0, column=0, columnspan=2, rowspan=3, padx=5, pady=5)
 
         # Texts and initial states
         self.front_buttons_texts = ["Automatyczny", "Ręczny", "Wyłączony", "Wyłączenie awaryjne"]
 
         # Create text-label
-        title_label = tk.Label(self.front_buttons_frame, text="TRYB:")
-        title_label.grid(row=0, column=0, padx=5, pady=5)
-        self.front_button_label = tk.Label(self.front_buttons_frame, text=self.front_buttons_texts[2])
-        self.front_button_label.grid(row=1, column=0, padx=5, pady=5)
+        self.front_button_label = tk.Label(self.front_buttons_frame, text="TRYB: ---")
+        self.front_button_label.grid(row=0, column=0, padx=5, pady=50)
 
     def actuators_sensors(self):
         # Frame for diode indicators
@@ -570,7 +566,7 @@ class TCPClientGUI:
 
     def measurements(self):
         measurements_frame = tk.Frame(root)
-        measurements_frame.grid(row=0, column=10, columnspan=2, padx=5, pady=5)
+        measurements_frame.grid(row=4, column=0, columnspan=2, padx=5, pady=5)
 
         # Texts and initial states
         measurements_texts = ["Moc czynna [W]:", "Zużycie całkowite energii [Wh]:", "Zużycie chwilowe powietrza [l/m]:", "Zużycie całkowite powietrza [l]:"]
@@ -590,25 +586,53 @@ class TCPClientGUI:
             self.all_measurement_results.append(result_label)
 
     def cycle_progress(self):
-        cycle_progress_frame = tk.Frame(root)
-        cycle_progress_frame.grid(row=1, column=1, rowspan=2, padx=5, pady=5)
-
-        # Texts and initial states
-        initial_text = "---"
-
         self.cycle_progress_texts = ["Pozycja bazowa", "Piłka na prestop", "Piłka na stop", "Piłka na podnośniku",
                                      "Piłka na podnośniku - ssawka wysunięta", "Piłka na podnośniku - podniesiona",
                                      "Piłka przyssana", "Piłka przyssana - podnośnik w dole",
                                      "Piłka przyssana - ssawka wsunięta", "Wydmuch wykonany"]
 
         # Create text-label
-        self.cycle_progress_label = tk.Label(cycle_progress_frame, text=initial_text)
-        self.cycle_progress_label.grid(row=0, column=0, padx=5, pady=5)
+        self.cycle_progress_label = tk.Label(self.front_buttons_frame, text="STATUS: ---")
+        self.cycle_progress_label.grid(row=2, column=0, padx=5, pady=5)
 
         # Create progress bar
-        self.progress = ttk.Progressbar(cycle_progress_frame, orient="horizontal", length=300, mode="determinate")
+        self.progress = ttk.Progressbar(self.front_buttons_frame, orient="horizontal", length=300, mode="determinate")
         self.progress['value'] = 0
-        self.progress.grid(row=1, column=0, padx=5, pady=5)
+        self.progress.grid(row=3, column=0, padx=5, pady=5)
+
+    def create_graph(self):
+        self.graph_frame = tk.Frame(root)
+        self.graph_frame.grid(row=4, column=2, columnspan=2, padx=5, pady=5)
+        # Create a matplotlib figure
+        self.figure = Figure(figsize=(5, 2), dpi=100)
+        self.ax = self.figure.add_subplot(111)
+
+        # Configure the graph appearance
+        self.ax.set_title("Sample Graph")
+        self.ax.set_xlabel("X Axis")
+        self.ax.set_ylabel("Y Axis")
+
+        # Embed the graph into the Tkinter window
+        self.canvas = FigureCanvasTkAgg(self.figure, master=self.graph_frame)
+        self.canvas.get_tk_widget().grid(row=0, column=0, columnspan=2, padx=5, pady=5)
+
+        self.update_graph()
+
+    def update_graph(self):
+        self.ax.clear()
+        # Sample data for the graph
+        cursor = self.mydb.cursor()
+
+        query = f'SELECT * FROM (SELECT * FROM tcp_frame ORDER BY id DESC LIMIT {self.global_session_counter}) AS subquery ORDER BY id'
+        cursor.execute(query)
+        data = cursor.fetchall()
+        ids = [row[0] for row in data]
+        timestamps = [row[4].timestamp() for row in data]
+
+        # Plot the data
+        self.ax.plot(timestamps, ids, marker='o')
+
+        self.canvas.draw()
 
     def draw_circle(self, canvas, x, y, radius, color="black"):
         # Calculate the bounding box coordinates
