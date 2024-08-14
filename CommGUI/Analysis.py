@@ -1,13 +1,10 @@
-from sklearn.cluster import DBSCAN
-from sklearn.datasets import make_blobs
-from sklearn.preprocessing import LabelEncoder
-from sklearn.preprocessing import StandardScaler
+from sklearn.cluster import KMeans
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import os
 import mysql.connector
-import seaborn as sns
+
 
 # Step 1: Connect to MySQL database
 conn = mysql.connector.connect(
@@ -24,66 +21,57 @@ df = pd.read_sql(query, conn)
 # Close the connection
 conn.close()
 
-label_encoder = LabelEncoder()
-df['state_encoded'] = label_encoder.fit_transform(df['state'])
+# Unique states
+states = [2 ** num for num in range(11)]
 
-# Prepare the features for clustering
-features = df[['state_encoded', 'cumulative_air', 'time']]
+counter = 0
+for state in states:
+    # Filter data for the current state
+    state_data = df[df['state'] == state]
 
-# Normalize the features
-scaler = StandardScaler()
-features_scaled = scaler.fit_transform(features)
+    if state_data.shape[0] == 0:
+        counter += 1
+        continue
 
-# For air consumption
-# dbscan = DBSCAN(eps=0.4, min_samples=5)
-# For time
-dbscan = DBSCAN(eps=0.3, min_samples=5)
-# Fit the model
-df['cluster'] = dbscan.fit_predict(features_scaled)
+    # Define the features
+    features = ['time', 'cumulative_air']
+    X = state_data[features].values
 
-# Check cluster labels
-# print(df['cluster'].value_counts())
-print(df[['state', 'state_encoded', 'cumulative_air', 'time', 'cluster']])
+    # Apply KMeans clustering
+    kmeans = KMeans(n_clusters=1, random_state=0).fit(X)
 
-encoded_to_state = {index: state for index, state in enumerate(label_encoder.classes_)}
+    # Get the cluster center
+    center = kmeans.cluster_centers_[0]
 
-# Add the state name to the dataframe based on the encoded value
-df['state_name'] = df['state_encoded'].map(encoded_to_state)
+    # Calculate the distance of each point from the cluster center
+    distances = np.linalg.norm(X - center, axis=1)
 
-print(df[['id', 'state', 'cumulative_air', 'time', 'state_encoded', 'cluster', 'state_name']])
+    # Define a threshold for outliers (e.g., the 75th percentile)
+    threshold = np.percentile(distances, 75)
 
-all_states = ["Pozycja bazowa", "Piłka na prestop", "Piłka na stop", "Piłka na podnośniku",
-              "Piłka na podnośniku - ssawka wysunięta", "Piłka na podnośniku - podniesiona",
-              "Piłka przyssana", "Piłka przyssana - podnośnik w dole",
-              "Piłka przyssana - ssawka wsunięta", "Wydmuch wykonany"]
+    # Mark outliers
+    state_data['distance_from_center'] = distances
+    state_data['is_outlier'] = distances > threshold
 
-state_to_value = {state: i for i, state in enumerate(all_states)}
-value_to_state = {v: k for k, v in state_to_value.items()}
+    # Plot the results
+    plt.figure(figsize=(12, 8))
 
-df['state_value'] = df['state'].map(state_to_value)
+    # Plot in-cluster points
+    in_cluster = state_data[~state_data['is_outlier']]
+    plt.scatter(in_cluster['time'], in_cluster['cumulative_air'],
+                s=100, c='green', edgecolors='black', label='In-Cluster')
 
-unique_clusters = df['cluster'].unique()
-colors = sns.color_palette('tab10', len(unique_clusters) - 1)  # Exclude outliers
-color_mapping = {i: colors[i] for i in range(len(colors))}
-color_mapping[-1] = 'black'  # Outliers are black
+    # Plot outliers
+    outliers = state_data[state_data['is_outlier']]
+    plt.scatter(outliers['time'], outliers['cumulative_air'],
+                s=50, c='black', marker='x', label='Outliers')
 
-# Plot the data
-plt.figure(figsize=(16, 8))
+    # Plot cluster center
+    plt.scatter(center[0], center[1],
+                s=300, c='red', edgecolors='black', marker='*', label='Cluster Center')
 
-# Plot clusters (excluding outliers) with one marker
-sns.scatterplot(data=df[df['cluster'] != -1], x='time', y='cumulative_air', hue='cluster',
-                palette=color_mapping, legend='full', s=100)
-
-# Plot outliers with a different marker
-sns.scatterplot(data=df[df['cluster'] == -1], x='time', y='cumulative_air',
-                color='black', marker='X', legend='full', s=100)
-
-# Customize the plot
-# plt.xticks(ticks=list(state_to_value.values()), labels=[value_to_state[v] for v in state_to_value.values()], rotation=45, ha='right')
-plt.title('DBSCAN Clustering')
-plt.xlabel('Time [s]')
-plt.ylabel('Air consumption [l]')
-# plt.yscale('log')
-plt.tight_layout()
-plt.legend(title='Cluster')
-plt.show()
+    plt.title(f'KMeans Clustering for State: {state}')
+    plt.xlabel('Time[s]')
+    plt.ylabel('Cumulative Air[l]')
+    plt.legend()
+    plt.savefig(f'{state}.png')
