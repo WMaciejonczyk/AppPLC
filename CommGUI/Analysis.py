@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import os
 import mysql.connector
+from mpl_toolkits.mplot3d import Axes3D
 
 
 # Step 1: Connect to MySQL database
@@ -21,8 +22,13 @@ df = pd.read_sql(query, conn)
 # Close the connection
 conn.close()
 
+states_strings = ["Pozycja bazowa", "Piłka na prestop", "Piłka na stop", "Piłka na podnośniku",
+                  "Piłka na podnośniku - ssawka wysunięta", "Piłka na podnośniku - podniesiona",
+                  "Piłka przyssana", "Piłka przyssana - podnośnik w dole",
+                  "Piłka przyssana - ssawka wsunięta", "Wydmuch wykonany"]
+
 # Unique states
-states = [2 ** num for num in range(11)]
+states = [2 ** num for num in range(len(states_strings) + 1)]
 
 counter = 0
 for state in states:
@@ -34,7 +40,7 @@ for state in states:
         continue
 
     # Define the features
-    features = ['time', 'cumulative_air']
+    features = ['time', 'cumulative_air', 'cumulative_energy']
     X = state_data[features].values
 
     # Apply KMeans clustering
@@ -54,24 +60,28 @@ for state in states:
     state_data['is_outlier'] = distances > threshold
 
     # Plot the results
-    plt.figure(figsize=(12, 8))
+    fig = plt.figure(figsize=(12, 8))
+    ax = fig.add_subplot(111, projection='3d')
 
     # Plot in-cluster points
     in_cluster = state_data[~state_data['is_outlier']]
-    plt.scatter(in_cluster['time'], in_cluster['cumulative_air'],
-                s=100, c='green', edgecolors='black', label='In-Cluster')
+    ax.scatter(in_cluster['time'], in_cluster['cumulative_air'], in_cluster['cumulative_energy'],
+               s=100, c='green', edgecolors='black', label='In-Cluster')
 
     # Plot outliers
     outliers = state_data[state_data['is_outlier']]
-    plt.scatter(outliers['time'], outliers['cumulative_air'],
-                s=50, c='black', marker='x', label='Outliers')
+    ax.scatter(outliers['time'], outliers['cumulative_air'], outliers['cumulative_energy'],
+               s=50, c='black', marker='x', label='Outliers')
 
     # Plot cluster center
-    plt.scatter(center[0], center[1],
-                s=300, c='red', edgecolors='black', marker='*', label='Cluster Center')
+    ax.scatter(center[0], center[1], center[2],
+               s=300, c='red', edgecolors='black', marker='*', label='Cluster Center')
 
-    plt.title(f'KMeans Clustering for State: {state}')
-    plt.xlabel('Time[s]')
-    plt.ylabel('Cumulative Air[l]')
-    plt.legend()
-    plt.savefig(f'{state}.png')
+    ax.set_title(f'KMeans Clustering for State: {states_strings[counter]}')
+    ax.set_xlabel('Time[s]')
+    ax.set_ylabel('Cumulative Air[l]')
+    ax.set_zlabel('Cumulative Energy[Wh]')
+    ax.legend()
+
+    plt.savefig(f'charts/{states_strings[counter]}.png')
+    counter += 1
