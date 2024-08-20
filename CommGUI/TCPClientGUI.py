@@ -1,3 +1,4 @@
+import sys
 import tkinter as tk
 from tkinter import messagebox
 import socket
@@ -18,30 +19,31 @@ class TCPFrame:
         self.status = data[2]
         self.ts_send = data[3]
         self.number = data[4]
-        self.version = data[5]
-        self.length = data[6]
-        self.ts_gen = data[7]
-        self.buttons = data[8]
-        self.actuators = data[9]
-        self.balls = data[10]
-        self.lamps = data[11]
-        self.pneumatic = data[12]
-        self.rest = data[13]
-        self.hmi = data[14]
-        self.activators = data[15]
-        self.states = data[16]
-        self.dead_mem = data[17]
-        self.mom_pow = data[18]
-        self.cum_en = data[19]
-        self.mom_air = data[20]
-        self.cum_air = data[21]
-        self.alarms = data[22]
-        self.end = data[23]
-        self.datetime = data[24]
+        self.profile = data[5]
+        self.version = data[6]
+        self.length = data[7]
+        self.ts_gen = data[8]
+        self.buttons = data[9]
+        self.actuators = data[10]
+        self.balls = data[11]
+        self.lamps = data[12]
+        self.pneumatic = data[13]
+        self.rest = data[14]
+        self.hmi = data[15]
+        self.activators = data[16]
+        self.states = data[17]
+        self.dead_mem = data[18]
+        self.mom_pow = data[19]
+        self.cum_en = data[20]
+        self.mom_air = data[21]
+        self.cum_air = data[22]
+        self.alarms = data[23]
+        self.end = data[24]
+        self.datetime = data[25]
 
     def get_attributes_without_data(self):
         result = [self.beginning, self.function, self.status,
-                  self.ts_send, self. number, self.version,
+                  self.ts_send, self. number, self.profile, self.version,
                   self.length, self.end]
 
         return result
@@ -61,7 +63,7 @@ class TCPFrame:
 
 
 class TCPClientGUI:
-    def __init__(self, root):
+    def __init__(self, root, measurement_type):
         self.root = root
         self.root.title("TCP Client")
 
@@ -83,9 +85,17 @@ class TCPClientGUI:
         self.received_tcp_frame = None
         self.first_frame = None
         self.temp_state = None
+        self.temp_profile = None
+        self.thread = None
+        self.stop_thread_flag = False
+        self.skip_flag = False
 
         self.global_session_counter = 0
         self.state_change = False
+        self.profile_change = False
+
+        if measurement_type:
+            self.measurement_type = measurement_type
 
         self.open_login_panel()
 
@@ -139,15 +149,37 @@ class TCPClientGUI:
     def start_receiving(self):
         self.global_session_counter = 0
         self.start()
-        self.thread = threading.Thread(target=self.receive_data, daemon=True)
-        self.thread.start()
+        self.stop_thread_flag = False
+        if not self.thread:
+            self.thread = threading.Thread(target=self.receive_data, daemon=True)
+            self.thread.start()
         self.data_output.config(text="Odbiór danych...", fg="green")
         self.data_start_label.config(text="STOP", command=self.stop_receiving)
 
     def stop_receiving(self):
         self.stop()
+        self.stop_thread_flag = True
         self.data_output.config(text="Zatrzymano odbieranie danych", fg="red")
         self.data_start_label.config(text="START", command=self.start_receiving)
+        # self.thread = None
+
+    def receive_data(self):
+        while self.connected and not self.stop_thread_flag:
+            try:
+                # Receiving bytes from PLC
+                data = self.client_socket.recv(80)
+                # Parsing received bytes
+                self.parse_data(data)
+                # Modifying interface accordingly
+                if not self.skip_flag:
+                    self.modify_GUI()
+                    # Updating database
+                    self.insert_row_into_db()
+            except socket.error:
+                self.thread = None
+                self.stop()
+
+        self.thread = None
 
         for i in range(len(self.all_canvas)):
             for j in range(len(self.all_canvas[i])):
@@ -157,29 +189,6 @@ class TCPClientGUI:
         self.cycle_progress_label.config(text="STATUS: ---")
         self.progress.config(value=0)
         self.global_session_counter = 0
-
-        while True:
-            try:
-                data = self.client_socket.recv(1024)
-                if not data:
-                    break
-            except AttributeError:
-                self.stop()
-                break
-
-    def receive_data(self):
-        while self.connected:
-            try:
-                # Receiving bytes from PLC
-                data = self.client_socket.recv(76)
-                # Parsing received bytes
-                self.parse_data(data)
-                # Modifying interface accordingly
-                self.modify_GUI()
-                # Updating database
-                self.insert_row_into_db()
-            except socket.error:
-                self.stop()
 
     def modify_GUI(self):
         try:
@@ -255,132 +264,170 @@ class TCPClientGUI:
             tcp_frame.append(data[:2].decode('utf-8'))                      # BEGINNING
             tcp_frame.append(int.from_bytes(data[2:4], byteorder='big'))    # FUNCTION
             tcp_frame.append(int.from_bytes(data[4:6], byteorder='big'))    # STATUS
-            tcp_frame.append(parse_timestamp(data[6:18])[0])                   # TIMESTAMP OF SENDING DATA
+            tcp_frame.append(parse_timestamp(data[6:18])[0])                # TIMESTAMP OF SENDING DATA
 
             seq_number = int.from_bytes(data[18:22], byteorder='big')
-            if self.received_tcp_frame and (seq_number != self.received_tcp_frame.number + 1):
-                raise ValueError("Wrong sequence number!")
+            if not self.skip_flag:
+                if self.received_tcp_frame and (seq_number != self.received_tcp_frame.number + 1):
+                    raise ValueError("Wrong sequence number!")
 
-            tcp_frame.append(seq_number)                                    # SEQUENCE NUMBER
-            tcp_frame.append(int.from_bytes(data[22:24], byteorder='big'))  # VERSION
+            tcp_frame.append(seq_number)    # SEQUENCE NUMBER
+
+            if self.measurement_type == 1:
+                profile = int.from_bytes(data[22:24], byteorder='big')
+
+                if not self.temp_profile:
+                    self.temp_profile = profile
+                elif self.temp_profile != profile:
+                    self.profile_change = True
+                    self.insert_row_into_measurements_table(self.measurement_type)
+                    self.temp_profile = profile
+
+            tcp_frame.append(int.from_bytes(data[22:24], byteorder='big'))  # PROFILE
+            tcp_frame.append(int.from_bytes(data[24:26], byteorder='big'))  # VERSION
 
             # Checking if the attribute 'length' is correctly set
-            length = int.from_bytes(data[24:26], byteorder='big')
+            length = int.from_bytes(data[26:28], byteorder='big')
             if length != len(data):
                 raise ValueError()
 
             tcp_frame.append(length)
 
             # DATA PART
-            tcp_frame.append(parse_timestamp(data[26:38])[0])                  # TIMESTAMP OF GENERATING DATA
+            tcp_frame.append(parse_timestamp(data[28:40])[0])   # TIMESTAMP OF GENERATING DATA
 
             # BUTTONS, ACTUATORS, BALLS, LAMPS
             # Checking if mode (buttons) is correctly set
-            mode = format(int.from_bytes(data[38:40]), '04b')
+            mode = format(int.from_bytes(data[40:42]), '04b')
             if mode.count('1') != 1:
                 raise ValueError()
 
             for i in range(4):
-                tcp_frame.append(int.from_bytes(data[38 + i * 2:40 + i * 2], byteorder='big'))
+                tcp_frame.append(int.from_bytes(data[40 + i * 2:42 + i * 2], byteorder='big'))
 
-            tcp_frame.append(int.from_bytes(data[46:50], byteorder='big'))  # PNEUMATIC
+            tcp_frame.append(int.from_bytes(data[48:52], byteorder='big'))  # PNEUMATIC
 
             # REST, HMI, ACTIVATORS, STATES, DEAD MEMORY, MOMENTARY POWER, CUMULATIVE ENERGY
             # MOMENTARY AIR CONSUMPTION
 
             # Checking if state is correctly set
-            state = format(int.from_bytes(data[56:58]), '010b')[::-1]
+            state = format(int.from_bytes(data[58:60]), '010b')[::-1]
 
-            mode_int = int.from_bytes(data[38:40])
+            mode_int = int.from_bytes(data[40:42])
 
             # If mode is set to manual then state's ones' count can be equal 0
             if (state.count('1') == 0 and mode_int != 2) or state.count('1') > 1:
                 raise ValueError()
 
-            state_int = int.from_bytes(data[56:58], byteorder='big')
-            if not self.temp_state:
-                self.temp_state = state_int
-            elif self.temp_state != state_int:
-                self.state_change = True
-                self.insert_row_into_measurements_table()
-                self.temp_state = state_int
+            if self.measurement_type == 2:
+                state_int = int.from_bytes(data[58:60], byteorder='big')
+                if not self.temp_state:
+                    self.temp_state = state_int
+                elif self.temp_state != state_int:
+                    self.state_change = True
+                    self.insert_row_into_measurements_table(self.measurement_type)
+                    self.temp_state = state_int
 
-            for i in range(8):
-                tcp_frame.append(int.from_bytes(data[50 + i * 2:52 + i * 2], byteorder='big'))
+            for i in range(6):  # REST -> MOMENTARY POWER
+                tcp_frame.append(int.from_bytes(data[52 + i * 2:54 + i * 2], byteorder='big'))
 
-            tcp_frame.append(struct.unpack('f', data[66:70][::-1])[0])     # CUMULATIVE AIR CONSUMPTION
+            tcp_frame.append(struct.unpack('f', data[64:68][::-1])[0])  # CUMULATIVE ENERGY
 
-            tcp_frame.append(int.from_bytes(data[70:74], byteorder='big'))   # ALARMS
+            tcp_frame.append(int.from_bytes(data[66:68], byteorder='big'))  # MOMENTARY AIR CONSUMPTION
+
+            tcp_frame.append(struct.unpack('f', data[70:74][::-1])[0])     # CUMULATIVE AIR CONSUMPTION
+
+            tcp_frame.append(int.from_bytes(data[74:78], byteorder='big'))   # ALARMS
 
             tcp_frame.append(data[-2:].decode('utf-8'))                      # END
 
-            tcp_frame.append(parse_timestamp(data[26:38])[1])                # DATETIME
+            tcp_frame.append(parse_timestamp(data[28:40])[1])                # DATETIME
 
+            self.skip_flag = False
+            
+            frame = TCPFrame(tcp_frame)
+
+            if ((not self.first_frame) or self.profile_change) and self.measurement_type == 1:
+                self.first_frame = frame
+                self.profile_change = False
+
+            if ((not self.first_frame) or self.state_change) and self.measurement_type == 2:
+                self.first_frame = frame
+                self.state_change = False
+
+            self.received_tcp_frame = frame
+
+            if self.global_session_counter < 25:
+                self.global_session_counter += 1
+            if self.global_session_counter == 1:
+                self.create_graph()
+            else:
+                self.update_graph()
         except ValueError:
-            self.stop_receiving()
-
-        frame = TCPFrame(tcp_frame)
-
-        if (not self.first_frame) or self.state_change:
-            self.first_frame = frame
-            self.state_change = False
-
-        self.received_tcp_frame = frame
-
-        if self.global_session_counter < 25:
-            self.global_session_counter += 1
-        if self.global_session_counter == 1:
-            self.create_graph()
-        else:
-            self.update_graph()
+            self.skip_flag = True
 
     def insert_row_into_db(self):
-        cursor = self.mydb.cursor()
+        try:
+            cursor = self.mydb.cursor()
 
-        first_part = self.received_tcp_frame.get_attributes_without_data()
+            first_part = self.received_tcp_frame.get_attributes_without_data()
 
-        frame_sql = 'INSERT INTO tcp_frame (`beginning`, `function`, `status`, `timestamp`, `number`, `version`, `length`, `ending`) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)'
+            frame_sql = 'INSERT INTO tcp_frame (`beginning`, `function`, `status`, `timestamp`, `number`, `profile`, `version`, `length`, `ending`) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)'
 
-        cursor.execute(frame_sql, first_part)
-        self.mydb.commit()
+            cursor.execute(frame_sql, first_part)
+            self.mydb.commit()
 
-        query = 'SELECT id FROM tcp_frame ORDER BY id DESC LIMIT 1'
-        cursor.execute(query)
-        foreign_key_tuple = cursor.fetchone()
-        foreign_key = foreign_key_tuple[0]
+            query = 'SELECT id FROM tcp_frame ORDER BY id DESC LIMIT 1'
+            cursor.execute(query)
+            foreign_key_tuple = cursor.fetchone()
+            foreign_key = foreign_key_tuple[0]
 
-        second_part = self.received_tcp_frame.get_data_attributes()
-        data_sql = f"""
-        INSERT INTO tcp_data (
-            `data_id`, `gen_ts`, `buttons`, `actuators_sensors`, `balls_sensors`, `lamps`, `pneumatic_receivers`,
-            `rest_receivers`, `HMI_buttons`, `activators`, `states`, `dead_memory`, `momentary_power`,
-            `cumulative_energy`, `momentary_air`, `cumulative_air`, `alarms`
-        ) VALUES (
-            {foreign_key}, %s, %s, %s, %s, %s, %s,
-            %s, %s, %s, %s, %s, %s,
-            %s, %s, %s, %s
-        )
-        """
+            second_part = self.received_tcp_frame.get_data_attributes()
+            data_sql = f"""
+            INSERT INTO tcp_data (
+                `data_id`, `gen_ts`, `buttons`, `actuators_sensors`, `balls_sensors`, `lamps`, `pneumatic_receivers`,
+                `rest_receivers`, `HMI_buttons`, `activators`, `states`, `dead_memory`, `momentary_power`,
+                `cumulative_energy`, `momentary_air`, `cumulative_air`, `alarms`
+            ) VALUES (
+                {foreign_key}, %s, %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s, %s,
+                %s, %s, %s, %s
+            )
+            """
 
-        cursor.execute(data_sql, second_part)
-        self.mydb.commit()
+            cursor.execute(data_sql, second_part)
+            self.mydb.commit()
 
-        cursor.close()
+            cursor.close()
+        except ValueError:
+            print("r")
 
-    def insert_row_into_measurements_table(self):
-        cumulative_air_subtraction = self.received_tcp_frame.cum_air - self.first_frame.cum_air
-        datetime_diff = self.received_tcp_frame.datetime - self.first_frame.datetime
-        time = datetime_diff.total_seconds()
-        cursor = self.mydb.cursor()
-        # TODO: cumulative energy
-        data = [self.first_frame.states, cumulative_air_subtraction, time]
+    def insert_row_into_measurements_table(self, measurement_type):
+        if measurement_type:
+            cumulative_air_subtraction = self.received_tcp_frame.cum_air - self.first_frame.cum_air
+            cumulative_energy_subtraction = self.received_tcp_frame.cum_en - self.first_frame.cum_en
+            datetime_diff = self.received_tcp_frame.datetime - self.first_frame.datetime
+            time = datetime_diff.total_seconds()
+            cursor = self.mydb.cursor()
+            table = ""
+            attribute_name = ""
+            attribute_value = None
 
-        frame_sql = 'INSERT INTO states_measurements (`state`, `cumulative_energy`, `cumulative_air`, `time`) VALUES (%s, 1000, %s, %s)'
+            if measurement_type == 1:
+                table = "cycles"
+                attribute_name = "profile"
+                attribute_value = self.first_frame.profile
+            elif measurement_type == 2:
+                table = "states"
+                attribute_name = "state"
+                attribute_value = self.first_frame.states
 
-        cursor.execute(frame_sql, data)
-        self.mydb.commit()
+            data = [attribute_value, cumulative_energy_subtraction, cumulative_air_subtraction, time]
+            frame_sql = f'INSERT INTO {table}_measurements (`{attribute_name}`, `cumulative_energy`, `cumulative_air`, `time`) VALUES (%s, %s, %s, %s)'
+            cursor.execute(frame_sql, data)
+            self.mydb.commit()
 
-        cursor.close()
+            cursor.close()
 
     def open_login_panel(self):
         # Clear existing widgets
@@ -601,11 +648,11 @@ class TCPClientGUI:
         self.progress.grid(row=3, column=0, padx=5, pady=5)
 
     def create_graph(self):
-        self.graph_frame = tk.Frame(root)
-        self.graph_frame.grid(row=4, column=2, columnspan=2, padx=5, pady=5)
+        graph_frame = tk.Frame(root)
+        graph_frame.grid(row=4, column=2, columnspan=6, padx=5, pady=5)
         # Create a matplotlib figure
-        self.figure = Figure(figsize=(5, 2), dpi=100)
-        self.ax = self.figure.add_subplot(111)
+        figure = Figure(figsize=(6, 2), dpi=100)
+        self.ax = figure.add_subplot(111)
 
         # Configure the graph appearance
         self.ax.set_title("Sample Graph")
@@ -613,8 +660,8 @@ class TCPClientGUI:
         self.ax.set_ylabel("Y Axis")
 
         # Embed the graph into the Tkinter window
-        self.canvas = FigureCanvasTkAgg(self.figure, master=self.graph_frame)
-        self.canvas.get_tk_widget().grid(row=0, column=0, columnspan=2, padx=5, pady=5)
+        self.canvas = FigureCanvasTkAgg(figure, master=graph_frame)
+        self.canvas.get_tk_widget().grid(row=0, column=0, columnspan=6, padx=5, pady=5)
 
         self.update_graph()
 
@@ -647,5 +694,5 @@ class TCPClientGUI:
 
 if __name__ == "__main__":
     root = tk.Tk()
-    gui = TCPClientGUI(root)
+    gui = TCPClientGUI(root, measurement_type=int(sys.argv[1]))
     root.mainloop()
