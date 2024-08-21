@@ -1,4 +1,3 @@
-import sys
 import tkinter as tk
 from tkinter import messagebox
 import socket
@@ -63,7 +62,7 @@ class TCPFrame:
 
 
 class TCPClientGUI:
-    def __init__(self, root, measurement_type):
+    def __init__(self, root):
         self.root = root
         self.root.title("TCP Client")
 
@@ -78,24 +77,26 @@ class TCPClientGUI:
         self.connected = False
         self.ip = ""
         self.port = 0
+
         self.all_canvas = []
         self.all_diodes = []
         self.all_measurement_labels = []
         self.all_measurement_results = []
+
         self.received_tcp_frame = None
-        self.first_frame = None
+        self.first_state_frame = None
+        self.first_cycle_frame = None
+
         self.temp_state = None
-        self.temp_profile = None
+
         self.thread = None
         self.stop_thread_flag = False
         self.skip_flag = False
+        self.last_one_flag = False
 
         self.global_session_counter = 0
         self.state_change = False
-        self.profile_change = False
-
-        if measurement_type:
-            self.measurement_type = measurement_type
+        self.cycle_change = False
 
         self.open_login_panel()
 
@@ -273,16 +274,6 @@ class TCPClientGUI:
 
             tcp_frame.append(seq_number)    # SEQUENCE NUMBER
 
-            if self.measurement_type == 1:
-                profile = int.from_bytes(data[22:24], byteorder='big')
-
-                if not self.temp_profile:
-                    self.temp_profile = profile
-                elif self.temp_profile != profile:
-                    self.profile_change = True
-                    self.insert_row_into_measurements_table(self.measurement_type)
-                    self.temp_profile = profile
-
             tcp_frame.append(int.from_bytes(data[22:24], byteorder='big'))  # PROFILE
             tcp_frame.append(int.from_bytes(data[24:26], byteorder='big'))  # VERSION
 
@@ -319,14 +310,18 @@ class TCPClientGUI:
             if (state.count('1') == 0 and mode_int != 2) or state.count('1') > 1:
                 raise ValueError()
 
-            if self.measurement_type == 2:
-                state_int = int.from_bytes(data[58:60], byteorder='big')
-                if not self.temp_state:
-                    self.temp_state = state_int
-                elif self.temp_state != state_int:
-                    self.state_change = True
-                    self.insert_row_into_measurements_table(self.measurement_type)
-                    self.temp_state = state_int
+            state_int = int.from_bytes(data[58:60], byteorder='big')
+
+            if self.temp_state == 1 and state_int != 1 and self.first_cycle_frame:
+                self.cycle_change = True
+                self.insert_row_into_measurements_table("cycle")
+
+            if not self.temp_state:
+                self.temp_state = state_int
+            elif self.temp_state != state_int:
+                self.state_change = True
+                self.insert_row_into_measurements_table("state")
+                self.temp_state = state_int
 
             for i in range(6):  # REST -> MOMENTARY POWER
                 tcp_frame.append(int.from_bytes(data[52 + i * 2:54 + i * 2], byteorder='big'))
@@ -347,12 +342,12 @@ class TCPClientGUI:
             
             frame = TCPFrame(tcp_frame)
 
-            if ((not self.first_frame) or self.profile_change) and self.measurement_type == 1:
-                self.first_frame = frame
-                self.profile_change = False
+            if not self.first_cycle_frame or self.cycle_change:
+                self.first_cycle_frame = frame
+                self.cycle_change = False
 
-            if ((not self.first_frame) or self.state_change) and self.measurement_type == 2:
-                self.first_frame = frame
+            if not self.first_state_frame or self.state_change:
+                self.first_state_frame = frame
                 self.state_change = False
 
             self.received_tcp_frame = frame
@@ -403,31 +398,28 @@ class TCPClientGUI:
             print("r")
 
     def insert_row_into_measurements_table(self, measurement_type):
-        if measurement_type:
-            cumulative_air_subtraction = self.received_tcp_frame.cum_air - self.first_frame.cum_air
-            cumulative_energy_subtraction = self.received_tcp_frame.cum_en - self.first_frame.cum_en
-            datetime_diff = self.received_tcp_frame.datetime - self.first_frame.datetime
-            time = datetime_diff.total_seconds()
-            cursor = self.mydb.cursor()
-            table = ""
-            attribute_name = ""
-            attribute_value = None
+        cursor = self.mydb.cursor()
 
-            if measurement_type == 1:
-                table = "cycles"
-                attribute_name = "profile"
-                attribute_value = self.first_frame.profile
-            elif measurement_type == 2:
-                table = "states"
-                attribute_name = "state"
-                attribute_value = self.first_frame.states
+        if measurement_type == "cycle":
+            frame, table, field, column = self.first_cycle_frame, "cycles_measurements", "profile", "profile"
+        elif measurement_type == "state":
+            frame, table, field, column = self.first_state_frame, "states_measurements", "states", "state"
+        else:
+            raise ValueError("Invalid measurement type")
 
-            data = [attribute_value, cumulative_energy_subtraction, cumulative_air_subtraction, time]
-            frame_sql = f'INSERT INTO {table}_measurements (`{attribute_name}`, `cumulative_energy`, `cumulative_air`, `time`) VALUES (%s, %s, %s, %s)'
-            cursor.execute(frame_sql, data)
-            self.mydb.commit()
+        cumulative_air_subtraction = self.received_tcp_frame.cum_air - frame.cum_air
+        cumulative_energy_subtraction = self.received_tcp_frame.cum_en - frame.cum_en
+        datetime_diff = self.received_tcp_frame.datetime - frame.datetime
+        time = datetime_diff.total_seconds()
 
-            cursor.close()
+        data = [getattr(frame, field), cumulative_energy_subtraction, cumulative_air_subtraction, time]
+
+        frame_sql = f'INSERT INTO {table} (`{column}`, `cumulative_energy`, `cumulative_air`, `time`) VALUES (%s, %s, %s, %s)'
+
+        cursor.execute(frame_sql, data)
+        self.mydb.commit()
+
+        cursor.close()
 
     def open_login_panel(self):
         # Clear existing widgets
@@ -694,5 +686,5 @@ class TCPClientGUI:
 
 if __name__ == "__main__":
     root = tk.Tk()
-    gui = TCPClientGUI(root, measurement_type=int(sys.argv[1]))
+    gui = TCPClientGUI(root)
     root.mainloop()
