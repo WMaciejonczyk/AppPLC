@@ -76,7 +76,23 @@ class TCPClientGUI:
         self.client_socket = None
         self.connected = False
         self.ip = ""
+        self.ip_entry = None
         self.port = 0
+        self.port_entry = None
+
+        self.data_start_label = None
+        self.data_output = None
+        self.front_buttons_frame = None
+        self.front_buttons_texts = ["Automatyczny", "Ręczny", "Wyłączony", "Wyłączenie awaryjne"]
+        self.front_button_label = None
+        self.cycle_progress_texts = ["Pozycja bazowa", "Piłka na prestop", "Piłka na stop", "Piłka na podnośniku",
+                                     "Piłka na podnośniku - ssawka wysunięta", "Piłka na podnośniku - podniesiona",
+                                     "Piłka przyssana", "Piłka przyssana - podnośnik w dole",
+                                     "Piłka przyssana - ssawka wsunięta", "Wydmuch wykonany"]
+        self.cycle_progress_label = None
+        self.progress = None
+        self.ax = None
+        self.canvas = None
 
         self.all_canvas = []
         self.all_diodes = []
@@ -173,7 +189,7 @@ class TCPClientGUI:
                 self.parse_data(data)
                 # Modifying interface accordingly
                 if not self.skip_flag:
-                    self.modify_GUI()
+                    self.modify_gui()
                     # Updating database
                     self.insert_row_into_db()
             except socket.error:
@@ -191,7 +207,7 @@ class TCPClientGUI:
         self.progress.config(value=0)
         self.global_session_counter = 0
 
-    def modify_GUI(self):
+    def modify_gui(self):
         try:
             if not self.received_tcp_frame:
                 raise ValueError("No TCP frame data available!")
@@ -367,7 +383,8 @@ class TCPClientGUI:
 
             first_part = self.received_tcp_frame.get_attributes_without_data()
 
-            frame_sql = 'INSERT INTO tcp_frame (`beginning`, `function`, `status`, `timestamp`, `number`, `profile`, `version`, `length`, `ending`) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)'
+            frame_sql = ('INSERT INTO tcp_frame (`beginning`, `function`, `status`, `timestamp`, `number`, '
+                         '`profile`, `version`, `length`, `ending`) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)')
 
             cursor.execute(frame_sql, first_part)
             self.mydb.commit()
@@ -414,7 +431,8 @@ class TCPClientGUI:
 
         data = [getattr(frame, field), cumulative_energy_subtraction, cumulative_air_subtraction, time]
 
-        frame_sql = f'INSERT INTO {table} (`{column}`, `cumulative_energy`, `cumulative_air`, `time`) VALUES (%s, %s, %s, %s)'
+        frame_sql = (f'INSERT INTO {table} (`{column}`, `cumulative_energy`, `cumulative_air`, `time`) '
+                     f'VALUES (%s, %s, %s, %s)')
 
         cursor.execute(frame_sql, data)
         self.mydb.commit()
@@ -427,24 +445,24 @@ class TCPClientGUI:
             widget.destroy()
 
         # Initialize with the entry frame
-        self.entry_frame = tk.Frame(root)
-        self.entry_frame.grid(row=0, column=0, padx=1, pady=1, sticky="nsew")
+        entry_frame = tk.Frame(self.root)
+        entry_frame.grid(row=0, column=0, padx=1, pady=1, sticky="nsew")
 
         # IP Entry
-        self.ip_label = tk.Label(self.entry_frame, text="Server IP:")
-        self.ip_label.grid(row=0, column=0, padx=5, pady=5)
-        self.ip_entry = tk.Entry(self.entry_frame)
+        ip_label = tk.Label(entry_frame, text="Server IP:")
+        ip_label.grid(row=0, column=0, padx=5, pady=5)
+        self.ip_entry = tk.Entry(entry_frame)
         self.ip_entry.grid(row=0, column=1, padx=5, pady=5)
 
         # Port Entry
-        self.port_label = tk.Label(self.entry_frame, text="Port:")
-        self.port_label.grid(row=1, column=0, padx=5, pady=5)
-        self.port_entry = tk.Entry(self.entry_frame)
+        port_label = tk.Label(entry_frame, text="Port:")
+        port_label.grid(row=1, column=0, padx=5, pady=5)
+        self.port_entry = tk.Entry(entry_frame)
         self.port_entry.grid(row=1, column=1, padx=5, pady=5)
 
         # Connect Button
-        self.connect_button = tk.Button(self.entry_frame, text="Connect", command=self.connect_to_server)
-        self.connect_button.grid(row=2, column=0, padx=5, pady=5)
+        connect_button = tk.Button(entry_frame, text="Connect", command=self.connect_to_server)
+        connect_button.grid(row=2, column=0, padx=5, pady=5)
 
     def open_main_panel(self):
         # Clear existing widgets
@@ -467,26 +485,23 @@ class TCPClientGUI:
 
     def data_widget(self):
         # Create text-label
-        self.data_frame = tk.Frame(root)
-        self.data_frame.grid(row=8, column=0, columnspan=2, rowspan=3, padx=5, pady=5)
+        data_frame = tk.Frame(self.root)
+        data_frame.grid(row=8, column=0, columnspan=2, rowspan=3, padx=5, pady=5)
 
-        self.data_start_label = tk.Button(self.data_frame, text="START", command=self.start_receiving)
+        self.data_start_label = tk.Button(data_frame, text="START", command=self.start_receiving)
         self.data_start_label.grid(row=0, column=0, columnspan=2, padx=5, pady=5)
 
-        self.data_output = tk.Label(self.data_frame, text="", fg="black")
+        self.data_output = tk.Label(data_frame, text="", fg="black")
         self.data_output.grid(row=1, column=0, columnspan=2, padx=5, pady=5)
 
         # Disconnect Button
-        self.disconnect_button = tk.Button(self.data_frame, text="Disconnect", command=self.disconnect_from_server)
-        self.disconnect_button.grid(row=2, column=0, columnspan=2, padx=5, pady=5)
+        disconnect_button = tk.Button(data_frame, text="Disconnect", command=self.disconnect_from_server)
+        disconnect_button.grid(row=2, column=0, columnspan=2, padx=5, pady=5)
 
     def front_buttons(self):
         # Frame for diode indicators
-        self.front_buttons_frame = tk.Frame(root)
+        self.front_buttons_frame = tk.Frame(self.root)
         self.front_buttons_frame.grid(row=0, column=0, columnspan=2, rowspan=3, padx=5, pady=5)
-
-        # Texts and initial states
-        self.front_buttons_texts = ["Automatyczny", "Ręczny", "Wyłączony", "Wyłączenie awaryjne"]
 
         # Create text-label
         self.front_button_label = tk.Label(self.front_buttons_frame, text="TRYB: ---")
@@ -494,7 +509,7 @@ class TCPClientGUI:
 
     def actuators_sensors(self):
         # Frame for diode indicators
-        actuators_frame = tk.Frame(root)
+        actuators_frame = tk.Frame(self.root)
         actuators_frame.grid(row=0, column=2, columnspan=2, padx=5, pady=5)
 
         # Texts and initial states
@@ -527,7 +542,7 @@ class TCPClientGUI:
 
     def balls_sensors(self):
         # Frame for diode indicators
-        balls_frame = tk.Frame(root)
+        balls_frame = tk.Frame(self.root)
         balls_frame.grid(row=0, column=4, columnspan=2, padx=5, pady=5)
 
         # Texts and initial states
@@ -559,7 +574,7 @@ class TCPClientGUI:
 
     def pneumatic_receivers(self):
         # Frame for diode indicators
-        receivers_frame = tk.Frame(root)
+        receivers_frame = tk.Frame(self.root)
         receivers_frame.grid(row=0, column=6, columnspan=4, padx=5, pady=5)
 
         # Texts and initial states
@@ -604,11 +619,12 @@ class TCPClientGUI:
         self.all_diodes.append(receivers_diodes)
 
     def measurements(self):
-        measurements_frame = tk.Frame(root)
+        measurements_frame = tk.Frame(self.root)
         measurements_frame.grid(row=4, column=0, columnspan=2, padx=5, pady=5)
 
         # Texts and initial states
-        measurements_texts = ["Moc czynna [W]:", "Zużycie całkowite energii [Wh]:", "Zużycie chwilowe powietrza [l/m]:", "Zużycie całkowite powietrza [l]:"]
+        measurements_texts = ["Moc czynna [W]:", "Zużycie całkowite energii [Wh]:",
+                              "Zużycie chwilowe powietrza [l/m]:", "Zużycie całkowite powietrza [l]:"]
 
         # Create text-label
         for i, text in enumerate(measurements_texts):
@@ -625,11 +641,6 @@ class TCPClientGUI:
             self.all_measurement_results.append(result_label)
 
     def cycle_progress(self):
-        self.cycle_progress_texts = ["Pozycja bazowa", "Piłka na prestop", "Piłka na stop", "Piłka na podnośniku",
-                                     "Piłka na podnośniku - ssawka wysunięta", "Piłka na podnośniku - podniesiona",
-                                     "Piłka przyssana", "Piłka przyssana - podnośnik w dole",
-                                     "Piłka przyssana - ssawka wsunięta", "Wydmuch wykonany"]
-
         # Create text-label
         self.cycle_progress_label = tk.Label(self.front_buttons_frame, text="STATUS: ---")
         self.cycle_progress_label.grid(row=2, column=0, padx=5, pady=5)
@@ -640,7 +651,7 @@ class TCPClientGUI:
         self.progress.grid(row=3, column=0, padx=5, pady=5)
 
     def create_graph(self):
-        graph_frame = tk.Frame(root)
+        graph_frame = tk.Frame(self.root)
         graph_frame.grid(row=4, column=2, columnspan=6, padx=5, pady=5)
         # Create a matplotlib figure
         figure = Figure(figsize=(6, 2), dpi=100)
@@ -662,7 +673,8 @@ class TCPClientGUI:
         # Sample data for the graph
         cursor = self.mydb.cursor()
 
-        query = f'SELECT * FROM (SELECT * FROM tcp_frame ORDER BY id DESC LIMIT {self.global_session_counter}) AS subquery ORDER BY id'
+        query = (f'SELECT * FROM (SELECT * FROM tcp_frame ORDER BY id DESC LIMIT {self.global_session_counter}) '
+                 f'AS subquery ORDER BY id')
         cursor.execute(query)
         data = cursor.fetchall()
         ids = [row[0] for row in data]
@@ -673,7 +685,8 @@ class TCPClientGUI:
 
         self.canvas.draw()
 
-    def draw_circle(self, canvas, x, y, radius, color="black"):
+    @staticmethod
+    def draw_circle(canvas, x, y, radius, color="black"):
         # Calculate the bounding box coordinates
         x1 = x - radius
         y1 = y - radius
@@ -685,6 +698,6 @@ class TCPClientGUI:
 
 
 if __name__ == "__main__":
-    root = tk.Tk()
-    gui = TCPClientGUI(root)
-    root.mainloop()
+    main_root = tk.Tk()
+    gui = TCPClientGUI(main_root)
+    main_root.mainloop()
